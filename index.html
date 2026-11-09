@@ -82,6 +82,22 @@ async function importDocuments(e){
 }
 async function docHash(file){if(window.crypto?.subtle){let h=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());return [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('')}return file.name+'|'+file.size+'|'+file.lastModified}
 function docMatches(d){return db.titles.filter(t=>t.contract===d.contract&&(d.amount<=0||Math.abs(t.amount-d.amount)<.02)&&( !d.due||t.due===d.due))}
+
+function docAllocRows(d){
+ const list=db.titles.filter(t=>t.contract===d.contract);
+ return '<div id="docAllocPanel" class="panel" style="margin:10px 0"><h2>Relacionar NFS-e a vários títulos</h2><p class="hint">Informe quanto desta nota corresponde a cada título. Vencimentos e valores originais não serão alterados. O total deve fechar exatamente com o valor da NFS-e.</p>'+(!list.length?'<p class="notice warning">Nenhum título encontrado para este cliente. Cadastre os títulos primeiro.</p>':'<div style="overflow-x:auto"><table><thead><tr><th>Título</th><th>Vencimento</th><th>Valor original</th><th>Já vinculado em outras notas</th><th>Vincular nesta nota (R$)</th></tr></thead><tbody>'+list.map(t=>{let used=(db.documents||[]).flatMap(x=>x.allocations||[]).filter(a=>a.titleId===t.id).reduce((v,a)=>v+Math.round(a.amount*100),0)/100;let available=Math.max(0,Math.round((t.amount-used)*100)/100);return '<tr><td>'+esc(t.type)+' '+esc(t.number||'')+'</td><td>'+formatDate(t.due)+'</td><td>'+money(t.amount)+'</td><td>'+money(used)+'</td><td><input class="docAlloc" data-title="'+esc(t.id)+'" type="number" min="0" max="'+available.toFixed(2)+'" step="0.01" value="0" oninput="docAllocTotal()" style="min-width:125px"></td></tr>'}).join('')+'</tbody></table></div>')+'<div class="statline"><span>Total vinculado</span><strong id="docAllocSum">R$ 0,00</strong></div><div class="statline"><span>Diferença para a NFS-e</span><strong id="docAllocDiff">—</strong></div><p class="hint" id="docAllocStatus">Aguardando distribuição dos valores.</p></div>';
+}
+function docAllocTotal(){
+ const cents=[...document.querySelectorAll('.docAlloc')].reduce((v,e)=>v+Math.round(Number(e.value||0)*100),0);
+ const amount=Math.round(Number(document.getElementById('docAmount')?.value||0)*100);
+ document.getElementById('docAllocSum').textContent=money(cents/100);
+ document.getElementById('docAllocDiff').textContent=money((amount-cents)/100);
+ document.getElementById('docAllocStatus').textContent=amount>0&&amount===cents?'Valores conciliados. Pronto para aprovação.':'É necessário fechar o valor integral da nota.';
+}
+function docActionChanged(){
+ const multi=get('docAction')==='multi';document.getElementById('docAllocPanel').style.display=multi?'block':'none';if(multi)docAllocTotal();
+}
+
 function renderDocuments(){
  db.documents??=[];let preview=document.getElementById('docPreview');if(!preview)return;
  if(!docQueue.length){preview.innerHTML='<div class="empty">Nenhum documento aguardando conferência.</div>'}
@@ -89,22 +105,40 @@ function renderDocuments(){
   docActive=Math.min(docActive,docQueue.length-1);let d=docQueue[docActive],opts=db.contracts.map(c=>'<option value="'+esc(c.id)+'" '+(c.id===d.contract?'selected':'')+'>'+esc(c.short)+'</option>').join('');
   let match=docMatches(d);
   let nfseInfo=d.nfseNational?'<div class="notice"><strong>NFS-e Nacional · DANFSe v2.0</strong><br>Chave de acesso: '+esc(d.nfseKey||'Não identificada')+'<br>Número: '+esc(d.nfseNumber||'Conferir')+' · Emissão: '+formatDate(d.nfseIssue)+' · Competência: '+formatDate(d.nfseCompetence)+'<br>IBS/CBS informados: '+(d.nfseTax===null?'Conferir':money(d.nfseTax))+'<br><strong>Valor principal:</strong> '+(d.amount?money(d.amount):'Conferir manualmente')+'<br><small>IBS/CBS não são lançados como despesa paga. NFS-e emitida não comprova recebimento.</small></div>':'';
-  preview.innerHTML='<p class="hint">'+(docActive+1)+' de '+docQueue.length+' · '+esc(d.name)+'</p>'+nfseInfo+'<div class="formgrid"><div class="field"><label>Tipo identificado</label><select id="docType"><option value="boleto">Boleto</option><option value="pix">Comprovante Pix</option><option value="nota">Nota fiscal</option><option value="contrato">Contrato</option><option value="relatorio">Relatório Tecinco</option><option value="outro">Outro</option></select></div><div class="field"><label>Cliente</label><select id="docContract"><option value="">Não identificado / Tecinco</option>'+opts+'</select></div><div class="field"><label>Valor identificado (R$)</label><input id="docAmount" type="number" min="0" step="0.01" value="'+(d.amount||'')+'"></div><div class="field"><label>Vencimento</label><input id="docDue" type="date" value="'+esc(d.due)+'"></div></div><div class="field"><label>Destino após aprovação</label><select id="docAction"><option value="link">Vincular a título existente (sem alterar valores)</option><option value="create">Criar título a receber em aberto</option><option value="archive">Somente registrar documento no histórico</option></select></div><div class="field"><label>Título existente</label><select id="docTitle"><option value="">Selecione o título</option>'+db.titles.filter(t=>t.contract===d.contract).map(t=>'<option value="'+esc(t.id)+'" '+(match.length===1&&match[0].id===t.id?'selected':'')+'>'+esc(contract(t.contract)?.short)+' · '+money(t.amount)+' · '+formatDate(t.due)+'</option>').join('')+'</select></div><div class="field"><label>Tipo do novo título</label><select id="docTitleType"><option value="implantacao">Implantação</option><option value="mensalidade">Mensalidade</option><option value="outro">Outro</option></select></div><p class="hint">'+(d.ambiguous?'Há vários valores no documento: confira manualmente. ':'')+'A leitura é sugestiva. Comprovante Pix ou nota fiscal NÃO confirma crédito bancário. Vincular um documento não dá baixa no título.</p><details><summary>Trecho de texto extraído para conferência</summary><p class="hint" style="white-space:pre-wrap">'+esc(d.excerpt)+'</p></details><div class="actions" style="margin-top:14px"><button class="btn good" onclick="approveDocument()">Aprovar lançamento</button><button class="btn secondary" onclick="skipDocument()">Descartar da fila</button></div>';
+  preview.innerHTML='<p class="hint">'+(docActive+1)+' de '+docQueue.length+' · '+esc(d.name)+'</p>'+nfseInfo+'<div class="formgrid"><div class="field"><label>Tipo identificado</label><select id="docType"><option value="boleto">Boleto</option><option value="pix">Comprovante Pix</option><option value="nota">Nota fiscal</option><option value="contrato">Contrato</option><option value="relatorio">Relatório Tecinco</option><option value="outro">Outro</option></select></div><div class="field"><label>Cliente</label><select id="docContract"><option value="">Não identificado / Tecinco</option>'+opts+'</select></div><div class="field"><label>Valor identificado (R$)</label><input id="docAmount" type="number" min="0" step="0.01" value="'+(d.amount||'')+'"></div><div class="field"><label>Vencimento</label><input id="docDue" type="date" value="'+esc(d.due)+'"></div></div><div class="field"><label>Destino após aprovação</label><select id="docAction"><option value="link">Vincular a título existente (sem alterar valores)</option><option value="multi">Relacionar NFS-e a vários títulos (conciliação integral)</option><option value="create">Criar título a receber em aberto</option><option value="archive">Somente registrar documento no histórico</option></select></div><div class="field"><label>Título existente</label><select id="docTitle"><option value="">Selecione o título</option>'+db.titles.filter(t=>t.contract===d.contract).map(t=>'<option value="'+esc(t.id)+'" '+(match.length===1&&match[0].id===t.id?'selected':'')+'>'+esc(contract(t.contract)?.short)+' · '+money(t.amount)+' · '+formatDate(t.due)+'</option>').join('')+'</select></div><div class="field"><label>Tipo do novo título</label><select id="docTitleType"><option value="implantacao">Implantação</option><option value="mensalidade">Mensalidade</option><option value="outro">Outro</option></select></div><p class="hint">'+(d.ambiguous?'Há vários valores no documento: confira manualmente. ':'')+'A leitura é sugestiva. Comprovante Pix ou nota fiscal NÃO confirma crédito bancário. Vincular um documento não dá baixa no título.</p><details><summary>Trecho de texto extraído para conferência</summary><p class="hint" style="white-space:pre-wrap">'+esc(d.excerpt)+'</p></details><div class="actions" style="margin-top:14px"><button class="btn good" onclick="approveDocument()">Aprovar lançamento</button><button class="btn secondary" onclick="skipDocument()">Descartar da fila</button></div>';
   document.getElementById('docType').value=d.type;document.getElementById('docContract').value=d.contract;
   document.getElementById('docContract').onchange=()=>{d.contract=get('docContract');renderDocuments()};
   document.getElementById('docAction').value=(d.contract&&match.length===1)?'link':'archive';
-  document.getElementById('docAction').onchange=()=>{};
+  document.getElementById('docAction').onchange=docActionChanged;
+  document.getElementById('docAmount').oninput=()=>{if(get('docAction')==='multi')docAllocTotal()};
+  docActionChanged();
  }
- document.getElementById('docHistory').innerHTML=table(['Data','Documento','Classificação','Destino'],[...db.documents].reverse().map(x=>tr([formatDate(x.readAt),esc(x.name),esc(x.type),esc(x.action==='link'?'Título vinculado':x.action==='create'?'Título criado':'Arquivado')])));
+ document.getElementById('docHistory').innerHTML=table(['Data','Documento','Classificação','Destino'],[...db.documents].reverse().map(x=>tr([formatDate(x.readAt),esc(x.name),esc(x.type),esc(x.action==='multi'?'NFS-e vinculada a '+(x.allocations||[]).length+' títulos':x.action==='link'?'Título vinculado':x.action==='create'?'Título criado':'Arquivado')])));
 }
 function skipDocument(){docQueue.splice(docActive,1);docActive=0;renderDocuments()}
 function approveDocument(){
  let d=docQueue[docActive];if(!d)return;
  let type=get('docType'),cid=get('docContract'),amount=Number(get('docAmount')),due=get('docDue'),action=get('docAction'),titleId=get('docTitle'),titleType=get('docTitleType');
  if(d.nfseNational&&d.nfseKey&&(db.documents||[]).some(x=>x.nfseKey===d.nfseKey))return alert('Esta chave de NFS-e já foi registrada.');
+ let allocations=[];
+ if(action==='multi'){
+  if(type!=='nota'||!cid||!(amount>0))return alert('Selecione uma nota fiscal, um cliente e um valor válido.');
+  const entries=[...document.querySelectorAll('.docAlloc')];
+  for(const e of entries){
+   const value=Number(e.value||0),cents=Math.round(value*100);
+   if(!Number.isFinite(value)||value<0||Math.abs(value*100-cents)>.0001)return alert('Informe valores válidos com até duas casas decimais.');
+   if(!cents)continue;
+   const t=db.titles.find(x=>x.id===e.dataset.title);
+   if(!t||t.contract!==cid)return alert('Título inválido ou de outro cliente.');
+   const already=(db.documents||[]).flatMap(x=>x.allocations||[]).filter(a=>a.titleId===t.id).reduce((v,a)=>v+Math.round(a.amount*100),0);
+   if(cents>Math.round(t.amount*100)-already)return alert('Valor acima do disponível para o título de '+formatDate(t.due));
+   allocations.push({titleId:t.id,amount:cents/100});
+  }
+  if(!allocations.length||allocations.reduce((v,a)=>v+Math.round(a.amount*100),0)!==Math.round(amount*100))return alert('O total dos títulos precisa fechar exatamente com o valor da NFS-e.');
+ }
  if(action==='link'){let t=db.titles.find(x=>x.id===titleId);if(!t)return alert('Selecione um título existente.');if(cid&&t.contract!==cid)return alert('O título pertence a outro cliente.');if(amount>0&&Math.abs(t.amount-amount)>.02&&!confirm('Valor diferente do título existente. Vincular mesmo assim?'))return;if(due&&t.due!==due&&!confirm('Vencimento diferente do título existente. Vincular mesmo assim?'))return; t.source=[t.source,'Documento: '+d.name].filter(Boolean).join(' | ')}
  if(action==='create'){if(!cid||!(amount>0)||!due)return alert('Para criar título, informe cliente, valor e vencimento.');if(db.titles.some(t=>t.contract===cid&&Math.abs(t.amount-amount)<.02&&t.due===due))return alert('Já existe um título com mesmo cliente, valor e vencimento. Vincule o documento em vez de criar duplicidade.');titleId=uid();db.titles.push({id:titleId,contract:cid,type:titleType,number:0,amount,due,source:'Importado de '+d.name,paymentChannel:'tecinco'})}
- db.documents??=[];db.documents.push({id:d.id,hash:d.hash,name:d.name,size:d.size,readAt:d.readAt,type,contract:cid,amount:amount||0,due,action,titleId:action==='archive'?'':titleId,nfseKey:d.nfseKey||'',nfseNumber:d.nfseNumber||'',nfseIssue:d.nfseIssue||'',nfseCompetence:d.nfseCompetence||'',nfseTax:d.nfseTax??null});
+ db.documents??=[];db.documents.push({id:d.id,hash:d.hash,name:d.name,size:d.size,readAt:d.readAt,type,contract:cid,amount:amount||0,due,action,titleId:action==='archive'?'':titleId,nfseKey:d.nfseKey||'',nfseNumber:d.nfseNumber||'',nfseIssue:d.nfseIssue||'',nfseCompetence:d.nfseCompetence||'',nfseTax:d.nfseTax??null,allocations});
  docQueue.splice(docActive,1);docActive=0;save();alert('Documento aprovado. Nenhum pagamento foi baixado automaticamente.');
 }
 
