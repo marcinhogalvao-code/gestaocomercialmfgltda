@@ -85,14 +85,14 @@ function docMatches(d){return db.titles.filter(t=>t.contract===d.contract&&(d.am
 
 function docAllocRows(d){
  const list=db.titles.filter(t=>t.contract===d.contract);
- return '<div id="docAllocPanel" class="panel" style="margin:10px 0"><h2>Relacionar NFS-e a vários títulos</h2><p class="hint">Informe quanto desta nota corresponde a cada título. Vencimentos e valores originais não serão alterados. O total deve fechar exatamente com o valor da NFS-e.</p>'+(!list.length?'<p class="notice warning">Nenhum título encontrado para este cliente. Cadastre os títulos primeiro.</p>':'<div style="overflow-x:auto"><table><thead><tr><th>Título</th><th>Vencimento</th><th>Valor original</th><th>Já vinculado em outras notas</th><th>Vincular nesta nota (R$)</th></tr></thead><tbody>'+list.map(t=>{let used=(db.documents||[]).flatMap(x=>x.allocations||[]).filter(a=>a.titleId===t.id).reduce((v,a)=>v+Math.round(a.amount*100),0)/100;let available=Math.max(0,Math.round((t.amount-used)*100)/100);return '<tr><td>'+esc(t.type)+' '+esc(t.number||'')+'</td><td>'+formatDate(t.due)+'</td><td>'+money(t.amount)+'</td><td>'+money(used)+'</td><td><input class="docAlloc" data-title="'+esc(t.id)+'" type="number" min="0" max="'+available.toFixed(2)+'" step="0.01" value="0" oninput="docAllocTotal()" style="min-width:125px"></td></tr>'}).join('')+'</tbody></table></div>')+'<div class="statline"><span>Total vinculado</span><strong id="docAllocSum">R$ 0,00</strong></div><div class="statline"><span>Diferença para a NFS-e</span><strong id="docAllocDiff">—</strong></div><p class="hint" id="docAllocStatus">Aguardando distribuição dos valores.</p></div>';
+ return '<div id="docAllocPanel" class="panel" style="margin:10px 0"><h2>Relacionar NFS-e a vários títulos</h2><p class="hint">Marque os títulos que fazem parte desta nota. Cada título selecionado entra automaticamente pelo valor integral ainda disponível para vinculação. Não há rateio parcial nesta modalidade. O total deve fechar exatamente com a NFS-e.</p>'+(!list.length?'<p class="notice warning">Nenhum título encontrado para este cliente. Cadastre os títulos primeiro.</p>':'<div style="overflow-x:auto"><table><thead><tr><th>Selecionar</th><th>Título</th><th>Vencimento</th><th>Valor do título</th><th>Já vinculado</th></tr></thead><tbody>'+list.map(t=>{let used=(db.documents||[]).flatMap(x=>x.allocations||[]).filter(a=>a.titleId===t.id).reduce((v,a)=>v+Math.round(a.amount*100),0)/100;let available=Math.round((t.amount-used)*100)/100;return '<tr><td><input class="docAlloc" aria-label="Selecionar título com vencimento '+formatDate(t.due)+'" data-title="'+esc(t.id)+'" data-amount="'+available.toFixed(2)+'" type="checkbox" onchange="docAllocTotal()" '+(available<=0?'disabled':'')+'></td><td>'+esc(t.type)+' '+esc(t.number||'')+'</td><td>'+formatDate(t.due)+'</td><td>'+money(t.amount)+'</td><td>'+money(used)+'</td></tr>'}).join('')+'</tbody></table></div>')+'<div class="statline"><span>Total dos títulos selecionados</span><strong id="docAllocSum">R$ 0,00</strong></div><div class="statline"><span>Diferença para a NFS-e</span><strong id="docAllocDiff">—</strong></div><p class="hint" id="docAllocStatus">Selecione os títulos relacionados à nota.</p></div>';
 }
 function docAllocTotal(){
- const cents=[...document.querySelectorAll('.docAlloc')].reduce((v,e)=>v+Math.round(Number(e.value||0)*100),0);
+ const cents=[...document.querySelectorAll('.docAlloc:checked')].reduce((v,e)=>v+Math.round(Number(e.dataset.amount||0)*100),0);
  const amount=Math.round(Number(document.getElementById('docAmount')?.value||0)*100);
  document.getElementById('docAllocSum').textContent=money(cents/100);
  document.getElementById('docAllocDiff').textContent=money((amount-cents)/100);
- document.getElementById('docAllocStatus').textContent=amount>0&&amount===cents?'Valores conciliados. Pronto para aprovação.':'É necessário fechar o valor integral da nota.';
+ document.getElementById('docAllocStatus').textContent=amount>0&&amount===cents?'Valores conciliados. Pronto para aprovação.':'Selecione títulos até fechar exatamente o valor da nota.';
 }
 function docActionChanged(){
  const multi=get('docAction')==='multi';document.getElementById('docAllocPanel').style.display=multi?'block':'none';if(multi)docAllocTotal();
@@ -123,15 +123,13 @@ function approveDocument(){
  let allocations=[];
  if(action==='multi'){
   if(type!=='nota'||!cid||!(amount>0))return alert('Selecione uma nota fiscal, um cliente e um valor válido.');
-  const entries=[...document.querySelectorAll('.docAlloc')];
+  const entries=[...document.querySelectorAll('.docAlloc:checked')];
   for(const e of entries){
-   const value=Number(e.value||0),cents=Math.round(value*100);
-   if(!Number.isFinite(value)||value<0||Math.abs(value*100-cents)>.0001)return alert('Informe valores válidos com até duas casas decimais.');
-   if(!cents)continue;
+   const cents=Math.round(Number(e.dataset.amount||0)*100);
    const t=db.titles.find(x=>x.id===e.dataset.title);
-   if(!t||t.contract!==cid)return alert('Título inválido ou de outro cliente.');
+   if(!t||t.contract!==cid||cents<=0)return alert('Título inválido ou sem saldo para vincular.');
    const already=(db.documents||[]).flatMap(x=>x.allocations||[]).filter(a=>a.titleId===t.id).reduce((v,a)=>v+Math.round(a.amount*100),0);
-   if(cents>Math.round(t.amount*100)-already)return alert('Valor acima do disponível para o título de '+formatDate(t.due));
+   if(cents>Math.round(t.amount*100)-already)return alert('O título de '+formatDate(t.due)+' já está vinculado a outra nota.');
    allocations.push({titleId:t.id,amount:cents/100});
   }
   if(!allocations.length||allocations.reduce((v,a)=>v+Math.round(a.amount*100),0)!==Math.round(amount*100))return alert('O total dos títulos precisa fechar exatamente com o valor da NFS-e.');
