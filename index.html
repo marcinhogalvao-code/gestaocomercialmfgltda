@@ -225,7 +225,7 @@ async function cloudFlush(){
 }
 async function cloudLogout(){
  if(cloudBusy||cloudPending)return alert('Aguarde a sincronização terminar antes de sair.');
- await cloudClient.auth.signOut();cloudUser=null;cloudReady=false;cloudShow('login','Sessão encerrada.'); 
+ await cloudClient.auth.signOut();cloudUser=null;cloudReady=false;localStorage.removeItem(KEY);db=initial();cloudShow('login','Sessão encerrada.'); 
 }
 async function cloudRefresh(){
  if(cloudBusy||cloudPending)return alert('Aguarde o envio dos dados antes de atualizar.');
