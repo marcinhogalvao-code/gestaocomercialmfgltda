@@ -38,11 +38,13 @@ const monthOf=d=>String(d||'').slice(0,7);
 const nextTenth=m=>{const [y,mm]=m.split('-').map(Number);return new Date(Date.UTC(y,mm,10)).toISOString().slice(0,10)};
 function prevMonth(m){const [y,mm]=m.split('-').map(Number);return new Date(Date.UTC(y,mm-2,1)).toISOString().slice(0,7)}
 function closingTotals(repassMonth){
+ // A competência do desconto é SEMPRE o mês seguinte ao recebimento direto.
+ // Ex.: ARS-Car recebida em 03/11 => desconto no repasse de 10/12, jamais em 10/11.
  const competence=prevMonth(repassMonth);
- const entries=db.ledger.filter(x=>monthOf(x.date)===competence);
- const credits=roundBR(entries.filter(x=>x.direction==='credit').reduce((v,x)=>v+x.amount,0));
- const advances=roundBR(entries.filter(x=>x.type==='advance').reduce((v,x)=>v+x.amount,0));
- const transfers=roundBR(db.ledger.filter(x=>x.type==='transfer'&&monthOf(x.date)===repassMonth).reduce((v,x)=>v+x.amount,0));
+ const inMonth=(x,m)=>monthOf(x.date)===m;
+ const credits=roundBR(db.ledger.filter(x=>x.direction==='credit'&&inMonth(x,competence)).reduce((v,x)=>v+x.amount,0));
+ const advances=roundBR(db.ledger.filter(x=>x.type==='advance'&&inMonth(x,competence)).reduce((v,x)=>v+x.amount,0));
+ const transfers=roundBR(db.ledger.filter(x=>x.type==='transfer'&&inMonth(x,repassMonth)).reduce((v,x)=>v+x.amount,0));
  const priorCredits=roundBR(db.ledger.filter(x=>x.direction==='credit'&&monthOf(x.date)<competence).reduce((v,x)=>v+x.amount,0));
  const priorAdvances=roundBR(db.ledger.filter(x=>x.type==='advance'&&monthOf(x.date)<competence).reduce((v,x)=>v+x.amount,0));
  const priorTransfers=roundBR(db.ledger.filter(x=>x.type==='transfer'&&monthOf(x.date)<repassMonth).reduce((v,x)=>v+x.amount,0));
@@ -53,15 +55,16 @@ function closingTotals(repassMonth){
 function renderClosing(){
  const el=document.getElementById('closingMonth');if(!el)return;
  const month=el.value||today().slice(0,7),t=closingTotals(month);
- document.getElementById('closingSummary').innerHTML='<p><strong>Repasse de '+formatDate(month+'-10')+'</strong> · apuração das entradas de '+t.competence+'</p><div class="cards">'+[
- ['Saldo anterior',money(t.prior),'Compensações e direitos ainda não liquidados'],
- ['Direitos do mês anterior',money(t.credits),'Fixo, comissões e bônus reconhecidos em '+t.competence],
- ['(-) Recebimentos diretos',money(t.advances),'Recebidos em '+t.competence+'; desconto somente no repasse de '+month],
+ document.getElementById('closingSummary').innerHTML='<p><strong>Repasse previsto: '+formatDate(month+'-10')+'</strong> · entradas recebidas entre 01 e o último dia de '+t.competence+'</p><div class="cards">'+[
+ ['Saldo anterior',money(t.prior),'Saldo transportado de repasses anteriores'],
+ ['Direitos apurados',money(t.credits),'Fixo, comissões e bônus reconhecidos em '+t.competence],
+ ['Descontos deste repasse',money(t.advances),'Somente recebimentos diretos de '+t.competence+'; nunca do próprio mês '+month],
  ['Repasses já registrados',money(t.transfers),'Pagamentos efetivos da Tecinco em '+month],
- [t.balance>=0?'Saldo líquido a receber':'Saldo a compensar',money(Math.abs(t.balance)),'Previsão: '+formatDate(month+'-10')]
- ].map(a=>'<div class="card"><span>'+a[0]+'</span><b>'+a[1]+'</b><small>'+a[2]+'</small></div>').join('')+'</div>';
+ [t.balance>=0?'Saldo líquido a receber':'Saldo a compensar',money(Math.abs(t.balance)),'Repasse de '+formatDate(month+'-10')]
+ ].map(a=>'<div class="card"><span>'+a[0]+'</span><b>'+a[1]+'</b><small>'+a[2]+'</small></div>').join('')+'</div>'+
+ '<p class="hint">Exemplo: um Pix da ARS-Car em 03/11/2026 entra no caixa de novembro, mas somente será descontado do repasse de 10/12/2026. Nenhum desconto é lançado no repasse de 10/11/2026 por esse Pix.</p>';
  const months=[...new Set(db.ledger.map(x=>x.type==='transfer'?monthOf(x.date):nextTenth(monthOf(x.date)).slice(0,7)).filter(Boolean).concat(month))].sort().reverse();
- document.getElementById('closingHistory').innerHTML=table(['Mês do repasse','Competência das entradas','Direitos','Desconto dos recebimentos diretos','Saldo acumulado'],months.map(m=>{const x=closingTotals(m);return tr([formatDate(m+'-10'),x.competence,money(x.credits),money(x.advances),money(x.balance)])}));
+ document.getElementById('closingHistory').innerHTML=table(['Repasse previsto','Recebimentos de','Direitos','Desconto de recebimentos diretos','Saldo acumulado'],months.map(m=>{const x=closingTotals(m);return tr([formatDate(m+'-10'),x.competence,money(x.credits),money(x.advances),money(x.balance)])}));
 }
 const goalKey=d=>d.slice(0,4)+'-T'+(Math.floor((Number(d.slice(5,7))-1)/3)+1);
 function quarterDates(k){const [year,q]=k.split('-T').map(Number),start=String(year)+'-'+String((q-1)*3+1).padStart(2,'0');const end=String(year)+'-'+String(q*3).padStart(2,'0');return [start,end]}
