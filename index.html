@@ -178,7 +178,12 @@ function closingTotals(repassMonth){
  // Ex.: ARS-Car recebida em 03/11 => desconto no repasse de 10/12, jamais em 10/11.
  const competence=prevMonth(repassMonth);
  const inMonth=(x,m)=>monthOf(x.date)===m;
- const credits=roundBR(db.ledger.filter(x=>x.direction==='credit'&&inMonth(x,competence)).reduce((v,x)=>v+x.amount,0));
+ const salaryEntries=db.ledger.filter(x=>x.type==='salary'&&(x.month===competence||inMonth(x,competence)));
+ const fixedSalary=roundBR(salaryEntries.length?salaryEntries.reduce((v,x)=>v+Number(x.amount),0):salaryFor(competence));
+ const commissions=roundBR(db.ledger.filter(x=>x.type==='commission'&&inMonth(x,competence)).reduce((v,x)=>v+Number(x.amount),0));
+ const bonuses=roundBR(db.ledger.filter(x=>x.type==='bonus'&&inMonth(x,competence)).reduce((v,x)=>v+Number(x.amount),0));
+ const otherCredits=roundBR(db.ledger.filter(x=>x.direction==='credit'&&!['salary','commission','bonus'].includes(x.type)&&inMonth(x,competence)).reduce((v,x)=>v+Number(x.amount),0));
+ const credits=roundBR(fixedSalary+commissions+bonuses+otherCredits);
  const advances=roundBR(db.ledger.filter(x=>x.type==='advance'&&inMonth(x,competence)).reduce((v,x)=>v+x.amount,0));
  const transfers=roundBR(db.ledger.filter(x=>x.type==='transfer'&&inMonth(x,repassMonth)).reduce((v,x)=>v+x.amount,0));
  const priorCredits=roundBR(db.ledger.filter(x=>x.direction==='credit'&&monthOf(x.date)<competence).reduce((v,x)=>v+x.amount,0));
@@ -187,14 +192,18 @@ function closingTotals(repassMonth){
  const adjustments=adjustmentTotals(repassMonth);const priorAdjustments=(db.adjustments||[]).filter(a=>a.month<repassMonth).reduce((v,a)=>v+(a.direction==='credit'?Number(a.amount):-Number(a.amount)),0);
  const prior=roundBR(priorCredits-priorAdvances-priorTransfers+priorAdjustments);
  const balance=roundBR(prior+credits+adjustments.credit-advances-adjustments.debit-transfers);
- return {competence,credits,advances,transfers,prior,balance,adjustments};
+ return {competence,credits,fixedSalary,commissions,bonuses,otherCredits,advances,transfers,prior,balance,adjustments};
 }
 function renderClosing(){
  const el=document.getElementById('closingMonth');if(!el)return;
  const month=el.value||today().slice(0,7),t=closingTotals(month);
  document.getElementById('closingSummary').innerHTML='<p><strong>Repasse previsto: '+formatDate(month+'-10')+'</strong> · entradas recebidas entre 01 e o último dia de '+t.competence+'</p><div class="cards">'+[
  ['Saldo anterior',money(t.prior),'Saldo transportado de repasses anteriores'],
- ['Direitos apurados',money(t.credits),'Fixo, comissões e bônus reconhecidos em '+t.competence],
+ ['Remuneração fixa',money(t.fixedSalary),'Competência '+t.competence+' · configuração salarial'],
+ ['Comissões',money(t.commissions),'Recebimentos confirmados em '+t.competence],
+ ['Premiações',money(t.bonuses),'Bônus reconhecidos em '+t.competence],
+ ['Outros créditos',money(t.otherCredits),'Créditos adicionais reconhecidos'],
+ ['Direitos apurados',money(t.credits),'Total da remuneração e demais direitos de '+t.competence],
  ['Ajustes extraordinários (+ / −)',money(t.adjustments.credit)+' / '+money(t.adjustments.debit),'Acréscimos e descontos programados para '+month],
  ['Descontos deste repasse',money(t.advances),'Somente recebimentos diretos de '+t.competence+'; nunca do próprio mês '+month],
  ['Repasses já registrados',money(t.transfers),'Pagamentos efetivos da Tecinco em '+month],
@@ -217,6 +226,10 @@ function renderReconciliation(month){
  const x=reconciliationCalc(month),c=(db.reconciliations||[]).find(z=>z.month===month);
  const noteList=x.invoices.map(n=>'NFS-e '+esc(n.number)+' ('+money(n.amount)+')').join('; ')||'Nenhuma NFS-e emitida neste mês';
  el.innerHTML='<div class="panel"><h2>Conciliação mensal · '+esc(month)+'</h2><p class="hint">Compare a apuração interna, a planilha enviada pela Tecinco e as NFS-e emitidas. A competência comercial é '+esc(x.t.competence)+'. A NFS-e não confirma pagamento.</p>'+
+ '<div class="statline"><span>Remuneração fixa</span><strong>'+money(x.t.fixedSalary)+'</strong></div>'+ 
+ '<div class="statline"><span>Comissões</span><strong>'+money(x.t.commissions)+'</strong></div>'+ 
+ '<div class="statline"><span>Premiações</span><strong>'+money(x.t.bonuses)+'</strong></div>'+ 
+ '<div class="statline"><span>Outros créditos</span><strong>'+money(x.t.otherCredits)+'</strong></div>'+ 
  '<div class="statline"><span>Saldo anterior + direitos reconhecidos</span><strong>'+money(x.t.prior+x.t.credits)+'</strong></div>'+
  '<div class="statline"><span>Ajustes extraordinários (créditos / descontos)</span><strong>'+money(x.t.adjustments.credit)+' / '+money(x.t.adjustments.debit)+'</strong></div>'+
  '<div class="statline"><span>Adiantamentos a compensar</span><strong>'+money(x.t.advances)+'</strong></div>'+
