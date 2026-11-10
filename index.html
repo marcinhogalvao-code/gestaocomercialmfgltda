@@ -40,24 +40,33 @@ function renderCash(){
  const realized=db.cash.filter(x=>monthOf(x.date)===month);
  const realizedIn=roundBR(realized.filter(x=>x.kind==='in').reduce((v,x)=>v+x.amount,0));
  const realizedOut=roundBR(realized.filter(x=>x.kind==='out').reduce((v,x)=>v+x.amount,0));
- // Remuneração: previsão por vencimento da NFS-e, realizado pela data do crédito.
- // Recibos vinculados ao lançamento financeiro existente não são somados duas vezes.
+ // A remuneração fixa do mês anterior é prevista para o dia 10.
+ // A NFS-e substitui a previsão-base (não é somada ao fixo).
+ const competence=prevMonth(month),salaryBase=roundBR(salaryFor(competence));
  const invoices=db.salaryInvoices||[];
+ const monthInvoices=invoices.filter(n=>monthOf(n.due)===month);
+ const invoiceForecast=roundBR(monthInvoices.reduce((v,n)=>v+Number(n.amount),0));
+ const invoiceOpenTotal=roundBR(monthInvoices.reduce((v,n)=>v+invoiceOpen(n),0));
+ const useInvoice=monthInvoices.length>0;
  const salaryReceipts=invoices.flatMap(n=>(n.receipts||[]).filter(r=>monthOf(r.date)===month).map(r=>({number:n.number,date:r.date,amount:Number(r.amount),id:r.ledgerId})));
- const salaryActual=roundBR(salaryReceipts.reduce((v,r)=>v+r.amount,0));
- const salaryExpected=roundBR(invoices.filter(n=>monthOf(n.due)===month).reduce((v,n)=>v+Number(n.amount),0));
- const salaryPending=roundBR(invoices.filter(n=>monthOf(n.due)===month).reduce((v,n)=>v+invoiceOpen(n),0));
+ const invoiceReceiptIds=new Set(invoices.flatMap(n=>(n.receipts||[]).map(r=>r.ledgerId).filter(Boolean)));
+ const manualTransfers=db.ledger.filter(x=>x.type==='transfer'&&monthOf(x.date)===month&&!invoiceReceiptIds.has(x.id));
+ const manualTransferAmount=roundBR(manualTransfers.reduce((v,x)=>v+Number(x.amount),0));
+ const salaryActual=roundBR(salaryReceipts.reduce((v,r)=>v+r.amount,0)+manualTransferAmount);
+ const salaryExpected=useInvoice?invoiceForecast:salaryBase;
+ const salaryPending=useInvoice?invoiceOpenTotal:roundBR(Math.max(0,salaryBase-manualTransferAmount));
  document.getElementById('cashSalaryCompare').innerHTML=[
- ['Remuneração prevista',money(salaryExpected),'Notas com vencimento neste mês'],
- ['Remuneração recebida',money(salaryActual),'Baixas confirmadas neste mês, pela data do crédito'],
- ['Remuneração em aberto',money(salaryPending),'Saldo atual das notas com vencimento neste mês']
+ ['Remuneração prevista',money(salaryExpected),useInvoice?'Valor das NFS-e com vencimento neste mês':'Remuneração fixa de '+competence+' · previsão para dia 10'],
+ ['Remuneração recebida',money(salaryActual),'Repasses confirmados no mês, inclusive baixa de NFS-e'],
+ ['Remuneração em aberto',money(salaryPending),useInvoice?'Saldo das NFS-e com vencimento no mês':'Fixo previsto ainda não recebido (antes dos ajustes do fechamento)']
  ].map(a=>'<div class="card"><span>'+a[0]+'</span><b>'+a[1]+'</b><small>'+a[2]+'</small></div>').join('');
- const salaryLines=[...invoices.filter(n=>monthOf(n.due)===month).map(n=>({date:n.due,desc:'NFS-e '+n.number+' · previsão',expected:n.amount,actual:0})),...salaryReceipts.map(r=>({date:r.date,desc:'NFS-e '+r.number+' · recebido',expected:0,actual:r.amount}))];
+ const salaryLines=[...(useInvoice?monthInvoices.map(n=>({date:n.due,desc:'NFS-e '+n.number+' · previsão',expected:n.amount,actual:0})):salaryBase>0?[{date:month+'-10',desc:'Remuneração fixa · '+competence,expected:salaryBase,actual:0}]:[]),...salaryReceipts.map(r=>({date:r.date,desc:'NFS-e '+r.number+' · recebido',expected:0,actual:r.amount})),...manualTransfers.map(r=>({date:r.date,desc:r.desc||'Repasse Tecinco',expected:0,actual:r.amount}))];
  document.getElementById('cashSalaryTable').innerHTML=table(['Data','Referência','Previsto','Realizado'],salaryLines.sort((a,b)=>a.date.localeCompare(b.date)).map(x=>tr([formatDate(x.date),esc(x.desc),x.expected?money(x.expected):'—',x.actual?money(x.actual):'—'])));
  const expected=[];
- for(const n of db.salaryInvoices||[]){
-  const rem=invoiceOpen(n);
-  if(rem>.005&&monthOf(n.due)===month)expected.push({due:n.due,desc:'Tecinco · NFS-e '+n.number,amount:rem,kind:'in'});
+ if(useInvoice){
+  for(const n of monthInvoices){const rem=invoiceOpen(n);if(rem>.005)expected.push({due:n.due,desc:'Tecinco · NFS-e '+n.number,amount:rem,kind:'in'});}
+ }else if(salaryPending>.005){
+  expected.push({due:month+'-10',desc:'Remuneração fixa Tecinco · '+competence+' (sem NFS-e)',amount:salaryPending,kind:'in'});
  }
  // Apenas títulos com recebimento DIRETO no CNPJ; títulos pagos à Tecinco não são caixa pessoal.
  for(const t of db.titles||[]){
