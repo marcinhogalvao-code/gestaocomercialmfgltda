@@ -196,7 +196,7 @@ function renderSalaryInvoices(){
  const paid=roundBR(invoices.reduce((v,n)=>v+invoicePaid(n),0));
  const cards=document.getElementById('salaryInvoiceCards');if(!cards)return;
  cards.innerHTML=[['Títulos em aberto',money(open),'Valor ainda a receber da Tecinco'],['Recebimentos confirmados',money(paid),'Baixas de notas de remuneração'],['Notas lançadas',String(invoices.length),'Sem duplicar direitos na conta-corrente']].map(a=>'<div class="card"><span>'+a[0]+'</span><b>'+a[1]+'</b><small>'+a[2]+'</small></div>').join('');
- document.getElementById('salaryInvoiceTable').innerHTML=table(['NFS-e','Competência','Emissão','Vencimento','Valor','Recebido','Em aberto','Ações'],[...invoices].sort((a,b)=>b.issued.localeCompare(a.issued)).map(n=>tr([esc(n.number),esc(n.competence),formatDate(n.issued),formatDate(n.due),money(n.amount),money(invoicePaid(n)),money(invoiceOpen(n)),invoiceOpen(n)>.005?'<button class="btn secondary" onclick="openSalaryReceipt(\''+n.id+'\')">Registrar recebimento</button>':pill('Quitado','green')])));
+ document.getElementById('salaryInvoiceTable').innerHTML=table(['NFS-e','Competência','Emissão','Vencimento','Valor','Recebido','Em aberto','Ações'],[...invoices].sort((a,b)=>b.issued.localeCompare(a.issued)).map(n=>tr([esc(n.number),esc(n.competence),formatDate(n.issued),formatDate(n.due),money(n.amount),money(invoicePaid(n)),money(invoiceOpen(n)),(invoiceOpen(n)>.005?'<button class="btn secondary" onclick="openSalaryReceipt(\''+n.id+'\')">Receber</button> ':'')+'<button class="btn secondary" onclick="editSalaryInvoice(\''+n.id+'\')">Editar</button> <button class="btn secondary" onclick="deleteSalaryInvoice(\''+n.id+'\')">Excluir</button>'])));
 }
 function openTecincoPayer(){
  const p=db.tecincoPayer||{};
@@ -212,24 +212,42 @@ function saveTecincoPayer(){
  if(!name||cnpj.length!==14)return alert('Informe a razão social e um CNPJ com 14 dígitos.');
  db.tecincoPayer={name,cnpj,email,note};db.entities=db.entities||[];let e=db.entities.find(e=>e.cnpj===cnpj);if(e)Object.assign(e,{name,cnpj,email,note});else db.entities.push({id:uid(),name,cnpj,email,note,role:'cliente'});modal.close();save();
 }
-function openSalaryInvoice(){
- if(!db.tecincoPayer?.name||!db.tecincoPayer?.cnpj)return alert('Cadastre primeiro a Tecinco Tecnologia com razão social e CNPJ.');
- showModal('Lançar NFS-e de remuneração da Tecinco',
- field('Número da nota fiscal','siNumber','text','')+
- field('Data de emissão','siIssued','date',today())+
- field('Mês de competência (remuneração)','siCompetence','month',prevMonth(today().slice(0,7)))+
- field('Vencimento / previsão do repasse','siDue','date',today().slice(0,7)+'-10')+
- field('Valor líquido a receber (R$)','siAmount','number','','min="0.01" step="0.01"')+
- field('Chave, link ou referência da nota','siRef','text','')+
- '<p class="hint">O título ficará em aberto até você registrar o pagamento. A nota não lança nova comissão nem novo salário.</p><button class="btn" onclick="saveSalaryInvoice()">Criar título a receber</button>');
+function openSalaryInvoice(){editSalaryInvoice('')}
+function editSalaryInvoice(id){
+ const n=(db.salaryInvoices||[]).find(x=>x.id===id);
+ if(!n&&(!db.tecincoPayer?.name||!db.tecincoPayer?.cnpj))return alert('Cadastre primeiro a Tecinco Tecnologia com razão social e CNPJ.');
+ showModal(n?'Editar título da NFS-e '+esc(n.number):'Lançar NFS-e de remuneração da Tecinco',
+ field('Número da nota fiscal','siNumber','text',n?.number||'')+
+ field('Data de emissão','siIssued','date',n?.issued||today())+
+ field('Competência do trabalho (mês anterior ao repasse)','siCompetence','month',n?.competence||prevMonth(today().slice(0,7)))+
+ field('Vencimento / recebimento previsto (mês da emissão)','siDue','date',n?.due||today())+
+ field('Valor a receber (R$)','siAmount','number',n?.amount||'','min="0.01" step="0.01"')+
+ field('Chave, link ou referência da nota','siRef','text',n?.ref||'')+
+ '<p class="hint">A NFS-e é emitida no mês do repasse, normalmente dia 10. A competência pode ser o mês anterior. Emitir a nota não confirma o pagamento.</p>'+
+ '<button class="btn" onclick="saveSalaryInvoice(\''+(id||'')+'\')">'+(n?'Salvar alterações':'Criar título a receber')+'</button>');
 }
-function saveSalaryInvoice(){
+function saveSalaryInvoice(id){
  const number=get('siNumber').trim(),issued=get('siIssued'),competence=get('siCompetence'),due=get('siDue'),amount=roundBR(Number(get('siAmount'))),ref=get('siRef').trim();
  if(!number||!issued||!competence||!due||!(amount>0))return alert('Informe número, datas, competência e valor da nota.');
  db.salaryInvoices=db.salaryInvoices||[];
- if(db.salaryInvoices.some(n=>n.number.toLowerCase()===number.toLowerCase()))return alert('Esta nota já foi cadastrada. Confira o número para evitar duplicidade.');
- db.salaryInvoices.push({id:uid(),number,issued,competence,due,amount,ref,receipts:[],payer:db.tecincoPayer.name,payerCnpj:db.tecincoPayer.cnpj});
+ const n=db.salaryInvoices.find(x=>x.id===id);
+ if(db.salaryInvoices.some(x=>x.id!==id&&x.number.toLowerCase()===number.toLowerCase()))return alert('Esta nota já foi cadastrada.');
+ if(n){
+  if(amount+0.005<invoicePaid(n))return alert('O valor não pode ser menor que os recebimentos confirmados.');
+  Object.assign(n,{number,issued,competence,due,amount,ref});
+  const doc=(db.documents||[]).find(d=>d.id===n.documentId);if(doc)Object.assign(doc,{nfseNumber:number,nfseIssue:issued,nfseCompetence:competence+'-01',due,amount});
+  for(const r of n.receipts||[]){const l=db.ledger.find(x=>x.id===r.ledgerId);if(l)l.desc='Repasse Tecinco · NFS-e '+number;const c=db.cash.find(x=>x.link===r.ledgerId);if(c)c.desc='Recebimento Tecinco · NFS-e '+number;}
+ }else db.salaryInvoices.push({id:uid(),number,issued,competence,due,amount,ref,receipts:[],payer:db.tecincoPayer.name,payerCnpj:db.tecincoPayer.cnpj});
  modal.close();save();
+}
+function deleteSalaryInvoice(id){
+ const n=(db.salaryInvoices||[]).find(x=>x.id===id);if(!n)return;
+ if((n.receipts||[]).length||db.ledger.some(l=>l.invoiceId===id))return alert('Esta nota possui recebimentos confirmados. Não é possível excluí-la sem conciliar os lançamentos financeiros.');
+ if(!confirm('Excluir o título da NFS-e '+n.number+'? A operação não pode ser desfeita.'))return;
+ db.salaryInvoices=db.salaryInvoices.filter(x=>x.id!==id);
+ // Preservar o histórico documental e liberar reimportação somente por ação explícita posterior.
+ const doc=(db.documents||[]).find(d=>d.id===n.documentId);if(doc){doc.action='archive';doc.titleId='';doc.deletedSalaryInvoice=true;}
+ save();
 }
 function openSalaryReceipt(id){
  const n=(db.salaryInvoices||[]).find(x=>x.id===id);if(!n)return;
@@ -340,7 +358,7 @@ function renderDocuments(){
   document.getElementById('docType').value=d.type;document.getElementById('docContract').value=d.contract||((d.type==='nota'&&db.tecincoPayer?.cnpj&&docDigits(d.excerpt||'').includes(db.tecincoPayer.cnpj))?'__tecinco__':'');
   document.getElementById('docContract').onchange=()=>{d.contract=get('docContract');renderDocuments()};
   document.getElementById('docAction').value=get('docContract')==='__tecinco__'?'salary':(d.type==='nota'&&d.contract?'multi':((d.contract&&match.length===1)?'link':'archive'));
-  if(get('docContract')==='__tecinco__'){document.getElementById('docTitleType').value='remuneracao';if(!get('docDue')&&d.nfseIssue)document.getElementById('docDue').value=nextTenth(d.nfseIssue.slice(0,7));}
+  if(get('docContract')==='__tecinco__'){document.getElementById('docTitleType').value='remuneracao';if(d.nfseIssue&&!d.due)document.getElementById('docDue').value=d.nfseIssue;}
   document.getElementById('docAction').onchange=docActionChanged;
   document.getElementById('docAmount').oninput=()=>{if(get('docAction')==='multi')docAllocTotal()};
   docActionChanged();
@@ -370,7 +388,7 @@ function approveDocument(){
  if(action==='salary'){
   if(type!=='nota'||!(amount>0)||!due)return alert('Confira a NFS-e, o valor e o vencimento.');
   if(!db.tecincoPayer?.cnpj)return alert('Cadastre a Tecinco em Notas de remuneração antes de importar.');
-  const number=d.nfseNumber||d.name,issued=d.nfseIssue||d.date||today(),competence=(d.nfseCompetence||issued).slice(0,7);
+  const number=d.nfseNumber||d.name,issued=d.nfseIssue||d.date||today(),competence=prevMonth(issued.slice(0,7));
   db.salaryInvoices=db.salaryInvoices||[];
   if(db.salaryInvoices.some(n=>n.number===number||d.nfseKey&&n.nfseKey===d.nfseKey))return alert('Esta nota já gerou título de remuneração.');
   titleId=uid();cid='__tecinco__';titleType='remuneracao';
@@ -380,7 +398,7 @@ function approveDocument(){
   if(cid!=='__tecinco__')return alert('Para remuneração, selecione Tecinco Tecnologia no campo Cliente.');
   if(!db.tecincoPayer?.cnpj)return alert('Cadastre a Tecinco em Notas de remuneração antes de aprovar esta nota.');
   if(type!=='nota'||!(amount>0)||!due)return alert('Informe nota fiscal, valor e vencimento.');
-  const number=d.nfseNumber||d.name,issued=d.nfseIssue||d.date||today(),competence=(d.nfseCompetence||issued).slice(0,7);
+  const number=d.nfseNumber||d.name,issued=d.nfseIssue||d.date||today(),competence=prevMonth(issued.slice(0,7));
   db.salaryInvoices=db.salaryInvoices||[];
   if(db.salaryInvoices.some(n=>n.number===number||d.nfseKey&&n.nfseKey===d.nfseKey))return alert('Esta NFS-e já possui um título de remuneração. Não duplique.');
   titleId=uid();
