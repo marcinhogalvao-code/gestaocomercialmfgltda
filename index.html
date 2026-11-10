@@ -51,7 +51,7 @@ function openAdjustment(id){
 }
 function saveAdjustment(id){
  const description=get('ajDesc').trim(),direction=get('ajDirection'),amount=roundBR(Number(get('ajAmount'))),month=get('ajMonth'),count=id?1:Number(get('ajCount'));
- if(!description||!['debit','credit'].includes(direction)||!(amount>0)||!/^\\d{4}-\\d{2}$/.test(month)||!Number.isInteger(count)||count<1||count>36)return alert('Confira descrição, natureza, valor, mês e quantidade de parcelas.');
+ if(!description||!['debit','credit'].includes(direction)||!(amount>0)||!/^\d{4}-\d{2}$/.test(month)||!Number.isInteger(count)||count<1||count>36)return alert('Confira descrição, natureza, valor, mês e quantidade de parcelas.');
  db.adjustments=db.adjustments||[];
  const old=db.adjustments.find(x=>x.id===id);
  if(old)Object.assign(old,{description,direction,amount,month});
