@@ -58,24 +58,24 @@ function renderCash(){
  const manualTransfers=db.ledger.filter(x=>x.type==='transfer'&&monthOf(x.date)===month&&!invoiceReceiptIds.has(x.id));
  const manualTransferAmount=roundBR(manualTransfers.reduce((v,x)=>v+Number(x.amount),0));
  const salaryActual=roundBR(salaryReceipts.reduce((v,r)=>v+r.amount,0)+manualTransferAmount);
- const salaryExpected=useInvoice?invoiceForecast:netExpected;
- const salaryPending=useInvoice?invoiceOpenTotal:roundBR(Math.max(0,netExpected-manualTransferAmount));
+ // A nota fiscal não pode apagar o fixo cadastrado em Configurações.
+ // Usamos o maior total entre direitos apurados e notas, nunca a soma dos dois.
+ const salaryExpected=roundBR(Math.max(netExpected,invoiceForecast));
+ const salaryPending=roundBR(Math.max(0,salaryExpected-salaryActual));
  document.getElementById('cashSalaryCompare').innerHTML=[
- ['Remuneração prevista',money(salaryExpected),useInvoice?'Valor das NFS-e com vencimento neste mês':'Fixo + comissões + bônus aprovados, descontados adiantamentos de '+competence],
+ ['Remuneração prevista',money(salaryExpected),'Fixo configurado + comissões + bônus − adiantamentos; notas não duplicam nem substituem valor maior'],
  ['Fixo previsto',money(salaryBase),'Competência '+competence],
  ['Comissões previstas',money(commissionExpected),'11% sobre recebimentos confirmados na competência '+competence],
  ['Bônus aprovados',money(bonusExpected),'Reconhecidos na competência '+competence],
  ['Adiantamentos a compensar',money(directAdvances),'Recebimentos diretos de clientes na competência '+competence],
  ['Remuneração recebida',money(salaryActual),'Repasses confirmados no mês, inclusive baixa de NFS-e'],
- ['Remuneração em aberto',money(salaryPending),useInvoice?'Saldo das NFS-e com vencimento no mês':'Fixo previsto ainda não recebido (antes dos ajustes do fechamento)']
+ ['Remuneração em aberto',money(salaryPending),'Previsão líquida menos repasses confirmados neste mês']
  ].map(a=>'<div class="card"><span>'+a[0]+'</span><b>'+a[1]+'</b><small>'+a[2]+'</small></div>').join('');
- const salaryLines=[...(useInvoice?monthInvoices.map(n=>({date:n.due,desc:'NFS-e '+n.number+' · previsão',expected:n.amount,actual:0})):netExpected>0?[{date:month+'-10',desc:'Repasse Tecinco · fixo + comissões + bônus − adiantamentos · '+competence,expected:netExpected,actual:0}]:[]),...salaryReceipts.map(r=>({date:r.date,desc:'NFS-e '+r.number+' · recebido',expected:0,actual:r.amount})),...manualTransfers.map(r=>({date:r.date,desc:r.desc||'Repasse Tecinco',expected:0,actual:r.amount}))];
+ const salaryLines=[...(salaryExpected>0?[{date:month+'-10',desc:'Repasse previsto Tecinco · fixo + comissões + bônus − adiantamentos · '+competence,expected:salaryExpected,actual:0}]:[]),...salaryReceipts.map(r=>({date:r.date,desc:'NFS-e '+r.number+' · recebido',expected:0,actual:r.amount})),...manualTransfers.map(r=>({date:r.date,desc:r.desc||'Repasse Tecinco',expected:0,actual:r.amount}))];
  document.getElementById('cashSalaryTable').innerHTML=table(['Data','Referência','Previsto','Realizado'],salaryLines.sort((a,b)=>a.date.localeCompare(b.date)).map(x=>tr([formatDate(x.date),esc(x.desc),x.expected?money(x.expected):'—',x.actual?money(x.actual):'—'])));
  const expected=[];
- if(useInvoice){
-  for(const n of monthInvoices){const rem=invoiceOpen(n);if(rem>.005)expected.push({due:n.due,desc:'Tecinco · NFS-e '+n.number,amount:rem,kind:'in'});}
- }else if(salaryPending>.005){
-  expected.push({due:month+'-10',desc:'Repasse Tecinco · fixo + comissões + bônus − adiantamentos · '+competence+' (sem NFS-e)',amount:salaryPending,kind:'in'});
+ if(salaryPending>.005){
+  expected.push({due:month+'-10',desc:'Repasse Tecinco · fixo + comissões + bônus − adiantamentos · '+competence,amount:salaryPending,kind:'in'});
  }
  // Apenas títulos com recebimento DIRETO no CNPJ; títulos pagos à Tecinco não são caixa pessoal.
  for(const t of db.titles||[]){
